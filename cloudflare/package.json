@@ -1,0 +1,17 @@
+{
+  "name": "namelessmc-cloudflare-runtime",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "types": "wrangler types --config wrangler.jsonc"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0",
+    "typescript": "^5.8.3"
+  }
+}
