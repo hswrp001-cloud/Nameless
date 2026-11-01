@@ -1,0 +1,59 @@
+FROM php:8.3-apache-bookworm
+
+ARG TIGRISFS_VERSION=1.2.1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl fuse git unzip \
+    libfreetype6-dev libjpeg62-turbo-dev libpng-dev libzip-dev \
+    libicu-dev libonig-dev libxml2-dev libcurl4-openssl-dev \
+    nodejs npm \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j"$(nproc)" gd pdo_mysql mysqli zip exif intl mbstring curl opcache \
+    && a2enmod rewrite headers \
+    && sed -i 's/^Listen 80$/Listen 8080/' /etc/apache2/ports.conf \
+    && sed -i 's/<VirtualHost \*:80>/<VirtualHost *:8080>/' /etc/apache2/sites-available/000-default.conf \
+    && printf '\nuser_allow_other\n' >> /etc/fuse.conf \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+
+WORKDIR /var/www/html
+COPY . .
+
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader \
+    && npm ci --no-audit --no-fund \
+    && rm -rf node_modules \
+    && mkdir -p /mnt/nameless-data /var/www/html/cache \
+    && chown -R www-data:www-data /var/www/html/cache
+
+RUN ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in amd64) TIGRIS_ARCH=amd64 ;; arm64) TIGRIS_ARCH=arm64 ;; *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; esac \
+    && curl -fsSL "https://github.com/tigrisdata/tigrisfs/releases/download/v${TIGRISFS_VERSION}/tigrisfs_${TIGRISFS_VERSION}_linux_${TIGRIS_ARCH}.tar.gz" -o /tmp/tigrisfs.tar.gz \
+    && tar -xzf /tmp/tigrisfs.tar.gz -C /usr/local/bin/ tigrisfs \
+    && chmod +x /usr/local/bin/tigrisfs \
+    && rm /tmp/tigrisfs.tar.gz
+
+COPY cloudflare/container-entrypoint.sh /usr/local/bin/nameless-container-entrypoint
+RUN chmod +x /usr/local/bin/nameless-container-entrypoint
+
+RUN printf '%s\n' \
+    '<Directory /var/www/html>' \
+    '    AllowOverride All' \
+    '    Require all granted' \
+    '</Directory>' \
+    '<Directory /var/www/html/cloudflare>' \
+    '    Require all denied' \
+    '</Directory>' \
+    '<FilesMatch "^(composer\\.(json|lock)|package(-lock)?\\.json|Dockerfile\\.cloudflare)$">' \
+    '    Require all denied' \
+    '</FilesMatch>' \
+    > /etc/apache2/conf-available/nameless-cloudflare.conf \
+    && a2enconf nameless-cloudflare
+
+ENV APACHE_RUN_DIR=/var/run/apache2 \
+    APACHE_RUN_USER=www-data \
+    APACHE_RUN_GROUP=www-data
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/nameless-container-entrypoint"]
+CMD ["apache2-foreground"]
